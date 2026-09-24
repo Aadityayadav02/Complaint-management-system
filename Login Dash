@@ -19,8 +19,6 @@
                 <a href="{{ url_for('signup') }}">New user? Create an account</a>
             </div>
         </div>
-        <div class="alert alert-info mt-3 text-center">
-            <small><strong>Default Admin Login:</strong><br>Email: admin@college.edu | Pass: admin123</small>
         </div>
     </div>
 </div>
