@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="card p-4">
+    <h4 class="mb-3"><i class="fas fa-chalkboard-teacher"></i> Assigned Tasks</h4>
+    <div class="row">
+        {% for c in complaints %}
+        <div class="col-md-6 mb-3">
+            <div class="card border-primary h-100">
+                <div class="card-header bg-transparent border-primary d-flex justify-content-between">
+                    <strong>{{ c.category }}</strong>
+                    <span class="badge bg-info text-dark">Pending Action</span>
+                </div>
+                <div class="card-body">
+                    <h6 class="card-title">Student: {{ c.student_name }} ({{ c.roll_no }})</h6>
+                    <p class="card-text">{{ c.description }}</p>
+                </div>
+                <div class="card-footer bg-transparent border-primary text-end">
+                    <a href="{{ url_for('resolve_complaint', id=c.id) }}" class="btn btn-success btn-sm">
+                        <i class="fas fa-check"></i> Mark Resolved
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="alert alert-success">No pending complaints assigned to you.</div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
