@@ -1,0 +1,194 @@
+import sqlite3
+import re 
+from flask import Flask,render_template, request, redirect, url_for, session, flash
+from werkzeug.security import generate_password_hash, check_password_hash
+
+app = Flask(__name__)
+app.secret_key = 'super_secret_key_for_college_project' 
+
+
+def init_db():
+    conn = sqlite3.connect('college_cms.db')
+    c = conn.cursor()
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        email TEXT UNIQUE,
+        password TEXT,
+        role TEXT, -- student, faculty, admin
+        mobile TEXT,
+        roll_no TEXT,
+        course TEXT,
+        branch TEXT,
+        semester TEXT,
+        designation TEXT
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS complaints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id INTEGER,
+        category TEXT,
+        description TEXT,
+        status TEXT DEFAULT 'Pending', -- Pending, Assigned, Resolved
+        assigned_faculty_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(student_id) REFERENCES users(id),
+        FOREIGN KEY(assigned_faculty_id) REFERENCES users(id)
+    )''')
+    c.execute("SELECT * FROM users WHERE role='admin'")
+    if not c.fetchone():
+        hashed_pw = generate_password_hash('admin123')
+        c.execute("INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
+                  ('Super Admin', 'admin@college.edu', hashed_pw, 'admin'))
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_db_connection():
+    conn = sqlite3.connect('college_cms.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+@app.route('/')
+def home():
+    if 'user_id' in session:
+        return redirect(url_for('dashboard'))
+    return redirect(url_for('login'))
+
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    if request.method == 'POST':
+        role = request.form['role']
+        name = request.form['name']
+        email = request.form['email']
+        password = generate_password_hash(request.form['password'])
+        mobile = request.form['mobile']
+        
+        EMAIL_REGEX = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(EMAIL_REGEX, email):
+            flash('Invalid email format. Please use a valid address (e.g., user@example.com).', 'danger')
+            return redirect(url_for('signup'))
+        
+        
+        conn = get_db_connection()
+        try:
+            if role == 'student':
+                conn.execute("INSERT INTO users (name, email, password, role, mobile, roll_no, course, branch, semester) VALUES (?,?,?,?,?,?,?,?,?)",
+                             (name, email, password, role, mobile, request.form['roll_no'], request.form['course'], request.form['branch'], request.form['semester']))
+            elif role == 'faculty':
+                conn.execute("INSERT INTO users (name, email, password, role, mobile, designation) VALUES (?,?,?,?,?,?)",
+                             (name, email, password, role, mobile, request.form['designation']))
+            conn.commit()
+            flash('Registration Successful! Please Login.', 'success')
+            return redirect(url_for('login'))
+        except sqlite3.IntegrityError:
+            flash('Email already exists!', 'Try another Email ')
+        finally:
+            conn.close()
+            
+    return render_template('signup.html')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        
+        conn = get_db_connection()
+        user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+        conn.close()
+        
+        if user and check_password_hash(user['password'], password):
+            session['user_id'] = user['id']
+            session['role'] = user['role']
+            session['name'] = user['name']
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Invalid Credentials', 'Check your email and password')
+            
+    return render_template('login.html')
+
+@app.route('/dashboard')
+def dashboard():
+    if 'user_id' not in session:
+        return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    user_id = session['user_id']
+    role = session['role']
+    
+    if role == 'student':
+        complaints = conn.execute('SELECT * FROM complaints WHERE student_id = ? ORDER BY id DESC', (user_id,)).fetchall()
+        conn.close()
+        return render_template('student_dash.html', complaints=complaints)
+        
+    elif role == 'faculty':
+        complaints = conn.execute('''
+            SELECT c.*, u.name as student_name, u.roll_no 
+            FROM complaints c 
+            JOIN users u ON c.student_id = u.id 
+            WHERE assigned_faculty_id = ? AND status != 'Resolved'
+        ''', (user_id,)).fetchall()
+        conn.close()
+        return render_template('faculty_dash.html', complaints=complaints)
+        
+    elif role == 'admin':
+        complaints = conn.execute('''
+            SELECT c.*, u.name as student_name, f.name as faculty_name 
+            FROM complaints c 
+            LEFT JOIN users u ON c.student_id = u.id
+            LEFT JOIN users f ON c.assigned_faculty_id = f.id
+            ORDER BY c.created_at DESC
+        ''').fetchall()
+        
+        faculties = conn.execute("SELECT * FROM users WHERE role = 'faculty'").fetchall()
+        conn.close()
+        return render_template('admin_dash.html', complaints=complaints, faculties=faculties)
+
+@app.route('/add_complaint', methods=['POST'])
+def add_complaint():
+    if session['role'] != 'student': return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    conn.execute('INSERT INTO complaints (student_id, category, description) VALUES (?, ?, ?)',
+                 (session['user_id'], request.form['category'], request.form['description']))
+    conn.commit()
+    conn.close()
+    flash('Complaint Registered Successfully', 'success')
+    return redirect(url_for('dashboard'))
+
+@app.route('/assign_complaint', methods=['POST'])
+def assign_complaint():
+    if session['role'] != 'admin': return redirect(url_for('login'))
+    
+    complaint_id = request.form['complaint_id']
+    faculty_id = request.form['faculty_id']
+    
+    conn = get_db_connection()
+    conn.execute("UPDATE complaints SET assigned_faculty_id = ?, status = 'Assigned' WHERE id = ?", (faculty_id, complaint_id))
+    conn.commit()
+    conn.close()
+    flash('Faculty Assigned Successfully', 'success')
+    return redirect(url_for('dashboard'))
+
+@app.route('/resolve_complaint/<int:id>')
+def resolve_complaint(id):
+    if session['role'] != 'faculty': return redirect(url_for('login'))
+    
+    conn = get_db_connection()
+    conn.execute("UPDATE complaints SET status = 'Resolved' WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+    flash('Complaint Marked as Resolved', 'success')
+    return redirect(url_for('dashboard'))
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+if __name__ == '__main__':
+    app.run(debug=True)
